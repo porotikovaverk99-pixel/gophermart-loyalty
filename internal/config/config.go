@@ -36,6 +36,10 @@ func ParseFlags() Config {
 	cfg.WorkerTimeout = 30 * time.Second
 	cfg.JWTExpiry = 3 * time.Hour
 
+	if err := cleanenv.ReadEnv(&cfg); err != nil {
+		log.Printf("Warning: error reading environment variables: %v", err)
+	}
+
 	flag.StringVar(&cfg.RunAddr, "a", cfg.RunAddr, "address and port to run server")
 	flag.StringVar(&cfg.BaseURL, "b", cfg.BaseURL, "base URL for shortened URLs")
 	flag.StringVar(&cfg.LogLevel, "l", cfg.LogLevel, "log level")
@@ -49,10 +53,6 @@ func ParseFlags() Config {
 	flag.StringVar(&cfg.AccrualSystemAddress, "r", cfg.AccrualSystemAddress, "address of the accrual calculation system")
 
 	flag.Parse()
-
-	if err := cleanenv.ReadEnv(&cfg); err != nil {
-		log.Printf("Warning: error reading environment variables: %v", err)
-	}
 
 	if cfg.BaseURL == "" {
 		host := "localhost"
