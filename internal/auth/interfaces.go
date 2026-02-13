@@ -1,10 +1,16 @@
+// Package auth предоставляет интерфейсы для аутентификации.
 package auth
 
+// Manager определяет контракт для работы с токенами аутентификации.
 type Manager interface {
+	// Generate создает токен для пользователя.
 	Generate(userID int64, login string) (string, error)
+
+	// Validate проверяет токен и возвращает информацию о пользователе.
 	Validate(tokenString string) (*UserInfo, error)
 }
 
+// UserInfo содержит данные пользователя из токена.
 type UserInfo struct {
 	UserID int64
 	Login  string

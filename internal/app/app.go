@@ -1,3 +1,4 @@
+// Package app инициализирует и запускает приложение Gophermart.
 package app
 
 import (
@@ -21,10 +22,10 @@ import (
 )
 
 const (
-	shutdownTimeout       = 15 * time.Second
-	serverShutdownTimeout = 10 * time.Second
+	shutdownTimeout = 15 * time.Second
 )
 
+// App представляет основное приложение, объединяющее все компоненты.
 type App struct {
 	config   *config.Config
 	logger   *zap.Logger
@@ -35,28 +36,35 @@ type App struct {
 	handlers *Handlers
 }
 
+// Clients содержит HTTP-клиенты для внешних сервисов.
 type Clients struct {
 	Accrual *client.AccrualClient
 }
 
+// Repositories содержит все репозитории для работы с БД.
 type Repositories struct {
 	Users   repository.UserRepository
 	Orders  repository.OrderRepository
 	Balance repository.BalanceRepository
+	db      *repository.Database
 }
 
+// Services содержит всю бизнес-логику приложения.
 type Services struct {
 	Auth    *service.AuthService
 	Orders  *service.OrderService
 	Balance *service.BalanceService
 }
 
+// Handlers содержит HTTP-обработчики.
 type Handlers struct {
 	Auth    *handler.AuthHandler
 	Orders  *handler.OrderHandler
 	Balance *handler.BalanceHandler
 }
 
+// NewApp создает и инициализирует новое приложение.
+// Загружает конфигурацию, подключается к БД, инициализирует все зависимости.
 func NewApp() (*App, error) {
 
 	cfg := config.ParseFlags()
@@ -72,20 +80,31 @@ func NewApp() (*App, error) {
 	}
 
 	clients := &Clients{
-		Accrual: client.NewAccrualClient("http://localhost:8081"),
+		Accrual: client.NewAccrualClient(cfg.AccrualSystemAddress),
 	}
 
 	repos := &Repositories{
 		Users:   repository.NewUserRepository(db.GetPool()),
 		Orders:  repository.NewOrderRepository(db.GetPool()),
 		Balance: repository.NewBalanceRepository(db.GetPool()),
+		db:      db,
 	}
 
-	jwtManager := auth.NewJWTManager(cfg.SecretKey, 30*time.Minute)
+	BalanceService := service.NewBalanceService(repos.Balance)
+
+	jwtManager := auth.NewJWTManager(cfg.SecretKey, cfg.JWTExpiry)
 	services := &Services{
-		Auth:    service.NewAuthService(repos.Users, jwtManager),
-		Orders:  service.NewOrderService(repos.Orders, clients.Accrual, zapLogger, cfg.WorkerQueueSize, cfg.WorkerCount),
-		Balance: service.NewBalanceService(repos.Balance),
+		Auth: service.NewAuthService(repos.Users, jwtManager),
+		Orders: service.NewOrderService(
+			repos.Orders,
+			clients.Accrual,
+			BalanceService,
+			zapLogger,
+			cfg.WorkerQueueSize,
+			cfg.WorkerCount,
+			cfg.WorkerCount,
+		),
+		Balance: BalanceService,
 	}
 
 	handlers := &Handlers{
@@ -117,14 +136,13 @@ func (a *App) setupRoutes() {
 	a.server.Handle("/api/user/register", a.handlers.Auth.RegisterHandler())
 	a.server.Handle("/api/user/login", a.handlers.Auth.LoginHandler())
 
-	JWTManager := auth.NewJWTManager("", 3*time.Hour)
-
-	authMiddleware := auth.AuthMiddleware(JWTManager)
+	authMiddleware := auth.AuthMiddleware(a.services.Auth.GetManager())
 
 	a.server.Handle("/api/user/orders", authMiddleware(a.handlers.Orders.BaseOrderHandler()))
 
 	a.server.Handle("/api/user/balance", authMiddleware(a.handlers.Balance.GetBalanceHandler()))
 	a.server.Handle("/api/user/balance/withdraw", authMiddleware(a.handlers.Balance.BalanceWithdrawHandler()))
+	a.server.Handle("/api/user/withdrawals", authMiddleware(a.handlers.Balance.GetWithdrawalsHandler()))
 
 	router.Get("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -132,10 +150,11 @@ func (a *App) setupRoutes() {
 	})
 }
 
+// Run запускает HTTP-сервер и воркеры, ожидает сигналов завершения.
+// Блокирует выполнение до остановки приложения.
 func (a *App) Run() error {
 
-	a.services.Orders.StartWorkers()
-	//defer a.services.Orders.StopWorkers()
+	a.services.Orders.StartAllWorkers()
 
 	serverErr := make(chan error, 1)
 
@@ -168,22 +187,23 @@ func (a *App) shutdown() {
 
 	a.logger.Info("Starting graceful shutdown")
 
+	a.logger.Info("Stopping order service workers...")
+	a.services.Orders.Stop()
+
 	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
 
 	a.logger.Info("Shutting down HTTP server...")
-	serverCtx, serverCancel := context.WithTimeout(ctx, serverShutdownTimeout)
-	defer serverCancel()
-
-	if err := a.server.Shutdown(serverCtx); err != nil {
+	if err := a.server.Shutdown(ctx); err != nil {
 		a.logger.Error("HTTP server shutdown error", zap.Error(err))
 	} else {
 		a.logger.Info("HTTP server stopped gracefully")
 	}
 
-	//if err := a.repos.Close(); err != nil {
-	//a.logger.Error("Failed to close database connections", zap.Error(err))
-	//}
+	if a.repos.db != nil {
+		a.logger.Info("Closing database connection...")
+		a.repos.db.Close()
+	}
 
 	select {
 	case <-ctx.Done():
@@ -193,6 +213,7 @@ func (a *App) shutdown() {
 	}
 }
 
+// Close освобождает ресурсы приложения (логгер).
 func (a *App) Close() {
 	_ = a.logger.Sync()
 }

@@ -1,3 +1,4 @@
+// Package service реализует бизнес-логику системы лояльности.
 package service
 
 import (
@@ -10,46 +11,79 @@ import (
 	"github.com/porotikovaverk99-pixel/gophermart-loyalty/internal/client"
 	"github.com/porotikovaverk99-pixel/gophermart-loyalty/internal/model"
 	"github.com/porotikovaverk99-pixel/gophermart-loyalty/internal/repository"
+	"github.com/porotikovaverk99-pixel/gophermart-loyalty/internal/validator"
 	"go.uber.org/zap"
 )
 
 var (
 	ErrNumberAlreadyExists = errors.New("number already exists")
+
+	ErrInvalidOrderNumber    = errors.New("invalid order number")
+	ErrOrderBelongsToAnother = errors.New("number belongs to another user")
 )
 
+const (
+	defaultTaskTimeout = 30 * time.Second
+	schedulerInterval  = 10 * time.Second
+)
+
+// OrderService управляет заказами и их проверкой в accrual-системе.
 type OrderService struct {
-	repo        repository.OrderRepository
-	accrual     *client.AccrualClient
-	logger      *zap.Logger
-	cancelFunc  context.CancelFunc
-	jobQueue    chan model.Order
-	workerCount int
-	wg          sync.WaitGroup
-	jobTimeout  time.Duration
+	repo           repository.OrderRepository
+	accrual        *client.AccrualClient
+	balanceService *BalanceService
+	logger         *zap.Logger
+	statusQueue    chan model.Order
+	statusWorkers  int
+	wg             sync.WaitGroup
+	taskTimeout    time.Duration
+	accrualQueue   chan model.AccrualTask
+	accrualWorkers int
+	stopChan       chan struct{}
 }
 
+// NewOrderService создает новый сервис заказов.
 func NewOrderService(
 	repo repository.OrderRepository,
 	accrual *client.AccrualClient,
+	balanceService *BalanceService,
 	logger *zap.Logger,
-	queueSize, workerCount int,
+	queueSize, statusWorkers, accrualWorkers int,
 ) *OrderService {
 	return &OrderService{
-		repo:        repo,
-		accrual:     accrual,
-		logger:      logger,
-		jobQueue:    make(chan model.Order, queueSize),
-		workerCount: workerCount,
-		jobTimeout:  30 * time.Second,
+		repo:           repo,
+		accrual:        accrual,
+		balanceService: balanceService,
+		logger:         logger,
+		statusQueue:    make(chan model.Order, queueSize),
+		statusWorkers:  statusWorkers,
+		taskTimeout:    defaultTaskTimeout,
+		accrualQueue:   make(chan model.AccrualTask, queueSize),
+		accrualWorkers: accrualWorkers,
 	}
 }
 
+// UploadOrder загружает новый заказ пользователя.
+// Возвращает ErrNumberAlreadyExists, если номер заказа уже загружен.
+// Возвращает ErrOrderBelongsToAnother, если номер заказа уже загружен другим пользователем.
 func (s *OrderService) UploadOrder(ctx context.Context, userID int64, number string) (int64, error) {
+
+	if !validator.Luhn(number) {
+		return 0, ErrInvalidOrderNumber
+	}
 
 	orderID, err := s.repo.CreateOrder(ctx, userID, number)
 	if err != nil {
 		if errors.Is(err, repository.ErrNumberAlreadyExists) {
-			return 0, ErrNumberAlreadyExists
+			order, getErr := s.repo.GetOrderByNumber(ctx, number)
+			if getErr != nil {
+				return 0, fmt.Errorf("get existing order: %w", getErr)
+			}
+
+			if order.UserID == userID {
+				return 0, ErrNumberAlreadyExists
+			}
+			return 0, ErrOrderBelongsToAnother
 		}
 		return 0, fmt.Errorf("create order: %w", err)
 	}
@@ -57,6 +91,7 @@ func (s *OrderService) UploadOrder(ctx context.Context, userID int64, number str
 	return orderID, nil
 }
 
+// GetUserOrders возвращает все заказы пользователя.
 func (s *OrderService) GetUserOrders(ctx context.Context, userID int64) ([]model.Order, error) {
 
 	orders, err := s.repo.GetUserOrders(ctx, userID)
@@ -67,58 +102,105 @@ func (s *OrderService) GetUserOrders(ctx context.Context, userID int64) ([]model
 	return orders, nil
 }
 
-func (s *OrderService) StartWorkers() {
-	ctx, cancel := context.WithCancel(context.Background())
-	s.cancelFunc = cancel
+// StartAllWorkers запускает все воркеры для обработки заказов и начисления баллов.
+func (s *OrderService) StartAllWorkers() {
+	stopChan := make(chan struct{})
+	s.stopChan = stopChan
 
-	for i := 0; i < s.workerCount; i++ {
+	s.startStatusWorkers()
+	s.startAccrualWorkers()
+
+	go s.scheduler(stopChan)
+}
+
+// Stop останавливает все воркеры и ожидает их завершения.
+func (s *OrderService) Stop() {
+	close(s.stopChan)
+	close(s.statusQueue)
+	close(s.accrualQueue)
+	s.wg.Wait()
+}
+
+func (s *OrderService) startStatusWorkers() {
+
+	for i := 0; i < s.statusWorkers; i++ {
 		s.wg.Add(1)
-		go s.taskWorker(ctx, i)
+		go s.statusWorker(i)
 	}
 
-	go s.scheduler(ctx)
 }
 
-func (s *OrderService) scheduler(ctx context.Context) {
-	ticker := time.NewTicker(10 * time.Second)
-	defer ticker.Stop()
+func (s *OrderService) startAccrualWorkers() {
 
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			orders, _ := s.repo.GetOrdersToProcess(ctx)
-			for _, order := range orders {
-				select {
-				case s.jobQueue <- order:
-				default:
-
-				}
-			}
-		}
+	for i := 0; i < s.accrualWorkers; i++ {
+		s.wg.Add(1)
+		go s.accrualWorker(i)
 	}
+
 }
 
-func (s *OrderService) taskWorker(ctx context.Context, workerID int) {
+func (s *OrderService) statusWorker(workerID int) {
 
 	defer s.wg.Done()
 
 	for {
 		select {
-		case <-ctx.Done():
-			return
 
-		case task, ok := <-s.jobQueue:
+		case task, ok := <-s.statusQueue:
 			if !ok {
 				return
 			}
 
-			taskCtx, cancel := context.WithTimeout(context.Background(), s.jobTimeout)
+			taskCtx, cancel := context.WithTimeout(context.Background(), s.taskTimeout)
 			defer cancel()
 
 			s.processOrder(taskCtx, task)
 
+		}
+	}
+}
+
+func (s *OrderService) accrualWorker(workerID int) {
+
+	defer s.wg.Done()
+
+	for {
+		select {
+
+		case task, ok := <-s.accrualQueue:
+			if !ok {
+				return
+			}
+
+			taskCtx, cancel := context.WithTimeout(context.Background(), s.taskTimeout)
+			defer cancel()
+
+			_ = s.balanceService.CreateAccrual(taskCtx, task.UserID, task.OrderNum, task.Amount)
+
+		}
+	}
+}
+
+func (s *OrderService) scheduler(stopChan chan struct{}) {
+
+	ticker := time.NewTicker(schedulerInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-stopChan:
+			return
+		case <-ticker.C:
+			taskCtx, cancel := context.WithTimeout(context.Background(), s.taskTimeout)
+			defer cancel()
+			orders, _ := s.repo.GetOrdersToProcess(taskCtx)
+			for _, order := range orders {
+				select {
+				case s.statusQueue <- order:
+				default:
+
+				}
+			}
 		}
 	}
 }
@@ -128,12 +210,11 @@ func (s *OrderService) processOrder(ctx context.Context, order model.Order) {
 	now := time.Now()
 	s.repo.UpdateLastChecked(ctx, order.ID, now)
 
-	resp, err := s.accrual.GetOrder(order.Number)
+	resp, clientErr := s.accrual.GetOrder(order.Number)
 
-	if err != nil {
+	if clientErr != nil {
 
-		if errors.Is(err, client.ErrOrderNotRegistered) {
-
+		if errors.Is(clientErr, client.ErrOrderNotRegistered) {
 			s.logger.Info("Order not found in accrual, registering...",
 				zap.String("order", order.Number))
 
@@ -141,38 +222,100 @@ func (s *OrderService) processOrder(ctx context.Context, order model.Order) {
 				s.logger.Error("Failed to register order in accrual",
 					zap.String("order", order.Number),
 					zap.Error(regErr))
+
+				clientErr = regErr
 			} else {
 				s.logger.Info("Order registered in accrual successfully",
 					zap.String("order", order.Number))
 			}
 		}
 
-		nextCheck := s.calculateNextCheck(order.RetryCount + 1)
-		s.repo.ScheduleNextCheck(ctx, order.ID, nextCheck, order.RetryCount+1)
+		nextRetryCount := order.RetryCount + 1
+		nextCheck := s.calculateNextCheck(nextRetryCount, clientErr)
+		s.repo.ScheduleNextCheck(ctx, order.ID, nextCheck, nextRetryCount)
 		return
 	}
 
-	err = s.repo.UpdateOrderStatus(ctx, order.ID, resp.Status, resp.Accrual)
+	err := s.repo.UpdateOrderStatus(ctx, order.ID, resp.Status, resp.Accrual)
 	if err != nil {
-		s.logger.Error("Failed to update order status", zap.String("number", order.Number))
+		s.logger.Error("Failed to update order status",
+			zap.String("number", order.Number),
+			zap.Error(err))
 	} else {
-		s.logger.Info("status updated", zap.String("number", order.Number))
+		s.logger.Info("Status updated",
+			zap.String("number", order.Number),
+			zap.String("status", resp.Status),
+			zap.Any("accrual", resp.Accrual))
 	}
 
 	if resp.Status == "PROCESSED" || resp.Status == "INVALID" {
+
+		if resp.Status == "PROCESSED" && resp.Accrual != nil && order.Status != "PROCESSED" {
+			s.notifyAccrual(ctx, order.UserID, order.Number, *resp.Accrual)
+		}
+
+		if err := s.repo.MarkOrderAsFinal(ctx, order.ID); err != nil {
+			s.logger.Error("Failed to mark order as final",
+				zap.String("number", order.Number),
+				zap.Error(err))
+		}
 		return
 	}
 
-	nextCheck := s.calculateNextCheck(0)
+	nextCheck := s.calculateNextCheck(0, nil)
 	s.repo.ScheduleNextCheck(ctx, order.ID, nextCheck, 0)
-
 }
 
-func (s *OrderService) calculateNextCheck(retryCount int) time.Time {
-	baseDelay := 5 * time.Second
-	delay := baseDelay * time.Duration(1<<uint(retryCount))
-	if delay > 5*time.Minute {
-		delay = 5 * time.Minute
+func (s *OrderService) notifyAccrual(ctx context.Context, userID int64, orderNum string, amount float64) {
+	select {
+	case s.accrualQueue <- model.AccrualTask{UserID: userID, OrderNum: orderNum, Amount: amount}:
+	default:
+		if err := s.balanceService.CreateAccrual(ctx, userID, orderNum, amount); err != nil {
+			s.logger.Error("Failed to create accrual",
+				zap.String("order", orderNum),
+				zap.Error(err))
+		}
 	}
-	return time.Now().Add(delay)
+}
+
+func (s *OrderService) calculateNextCheck(retryCount int, lastErr error) time.Time {
+
+	if lastErr != nil {
+
+		if errors.Is(lastErr, client.ErrRateLimitExceeded) {
+			return time.Now().Add(60 * time.Second)
+		}
+
+		if errors.Is(lastErr, client.ErrAccrualUnavailable) {
+
+			delays := []time.Duration{
+				10 * time.Second,
+				30 * time.Second,
+				1 * time.Minute,
+				2 * time.Minute,
+				5 * time.Minute,
+			}
+
+			if retryCount >= len(delays) {
+				retryCount = len(delays) - 1
+			}
+
+			return time.Now().Add(delays[retryCount])
+		}
+	}
+
+	delays := []time.Duration{
+		5 * time.Second,
+		10 * time.Second,
+		30 * time.Second,
+		1 * time.Minute,
+		2 * time.Minute,
+		5 * time.Minute,
+	}
+
+	if retryCount >= len(delays) {
+		retryCount = len(delays) - 1
+	}
+
+	return time.Now().Add(delays[retryCount])
 }

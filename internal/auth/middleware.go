@@ -1,3 +1,4 @@
+// Package auth предоставляет middleware для аутентификации через JWT-токены.
 package auth
 
 import (
@@ -6,6 +7,9 @@ import (
 	"strings"
 )
 
+// AuthMiddleware проверяет наличие и валидность токена в заголовке Authorization.
+// Токен должен быть в формате: Bearer <token>
+// При успешной валидации добавляет userID и userLogin в контекст запроса.
 func AuthMiddleware(authManager Manager) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

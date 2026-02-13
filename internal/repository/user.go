@@ -41,7 +41,7 @@ func (ps *UserPostgresRepository) CreateUser(ctx context.Context, login string, 
 	return id, nil
 }
 
-func (ps *UserPostgresRepository) GetUserByLogin(ctx context.Context, login string) (*model.User, error) {
+func (ps *UserPostgresRepository) GetUserByLogin(ctx context.Context, login string) (model.User, error) {
 	var user model.User
 
 	err := ps.pool.QueryRow(ctx,
@@ -52,10 +52,10 @@ func (ps *UserPostgresRepository) GetUserByLogin(ctx context.Context, login stri
 
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, ErrUserNotFound
+			return model.User{}, ErrUserNotFound
 		}
-		return nil, fmt.Errorf("failed to get user: %w", err)
+		return model.User{}, fmt.Errorf("failed to get user: %w", err)
 	}
 
-	return &user, nil
+	return user, nil
 }

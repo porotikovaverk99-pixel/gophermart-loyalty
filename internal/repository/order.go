@@ -42,6 +42,34 @@ func (ps *OrderPostgresRepository) CreateOrder(ctx context.Context, userID int64
 	return id, nil
 }
 
+func (ps *OrderPostgresRepository) GetOrderByNumber(ctx context.Context, number string) (model.Order, error) {
+
+	var order model.Order
+
+	err := ps.pool.QueryRow(ctx,
+		`SELECT id, user_id, number, status, accrual, uploaded_at, last_checked_at, next_check_at, retry_count
+		 FROM orders
+         WHERE number = $1`, number).Scan(
+		&order.ID,
+		&order.UserID,
+		&order.Number,
+		&order.Status,
+		&order.Accrual,
+		&order.UploadedAt,
+		&order.LastCheckedAt,
+		&order.NextCheckAt,
+		&order.RetryCount)
+
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return model.Order{}, ErrOrderNotFound
+		}
+		return model.Order{}, fmt.Errorf("failed to get order: %w", err)
+	}
+
+	return order, nil
+}
+
 func (ps *OrderPostgresRepository) GetUserOrders(ctx context.Context, userID int64) ([]model.Order, error) {
 
 	rows, err := ps.pool.Query(ctx,
@@ -90,6 +118,7 @@ func (ps *OrderPostgresRepository) GetOrdersToProcess(ctx context.Context) ([]mo
 		 FROM orders
          WHERE status IN ('NEW', 'PROCESSING') 
 		 AND next_check_at <= $1
+		 AND next_check_at IS NOT NULL
 		 FOR UPDATE SKIP LOCKED`, time.Now())
 
 	if err != nil {
@@ -143,5 +172,15 @@ func (ps *OrderPostgresRepository) ScheduleNextCheck(ctx context.Context, orderI
 	_, err := ps.pool.Exec(ctx,
 		"UPDATE orders SET next_check_at = $1, retry_count = $2 WHERE id = $3",
 		nextCheck, retryCount, orderID)
+	return err
+}
+
+func (ps *OrderPostgresRepository) MarkOrderAsFinal(ctx context.Context, orderID int64) error {
+	_, err := ps.pool.Exec(ctx,
+		`UPDATE orders 
+         SET next_check_at = NULL,
+             retry_count = 0
+         WHERE id = $1`,
+		orderID)
 	return err
 }

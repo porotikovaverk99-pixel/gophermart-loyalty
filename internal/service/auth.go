@@ -1,3 +1,4 @@
+// Package service реализует бизнес-логику системы лояльности.
 package service
 
 import (
@@ -8,6 +9,7 @@ import (
 	"github.com/porotikovaverk99-pixel/gophermart-loyalty/internal/auth"
 	"github.com/porotikovaverk99-pixel/gophermart-loyalty/internal/model"
 	"github.com/porotikovaverk99-pixel/gophermart-loyalty/internal/repository"
+	"github.com/porotikovaverk99-pixel/gophermart-loyalty/internal/validator"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -19,11 +21,13 @@ var (
 	ErrInvalidPassword    = errors.New("invalid password")
 )
 
+// AuthService отвечает за регистрацию и аутентификацию пользователей.
 type AuthService struct {
 	repo    repository.UserRepository
 	manager auth.Manager
 }
 
+// NewAuthService создает новый сервис аутентификации.
 func NewAuthService(repo repository.UserRepository, manager auth.Manager) *AuthService {
 	return &AuthService{
 		repo:    repo,
@@ -31,9 +35,17 @@ func NewAuthService(repo repository.UserRepository, manager auth.Manager) *AuthS
 	}
 }
 
+// GetManager возвращает менеджер аутентификации.
+func (s *AuthService) GetManager() auth.Manager {
+	return s.manager
+}
+
+// Register регистрирует нового пользователя.
+// Возвращает JWT-токен при успехе.
+// Ошибки: ErrInvalidInput, ErrInvalidLogin, ErrInvalidPassword, ErrLoginAlreadyExists.
 func (s *AuthService) Register(ctx context.Context, reqs model.RequestAuth) (string, error) {
 
-	if err := validateAuthRequest(reqs); err != nil {
+	if err := validator.ValidateAuth(reqs); err != nil {
 		return "", err
 	}
 
@@ -56,6 +68,9 @@ func (s *AuthService) Register(ctx context.Context, reqs model.RequestAuth) (str
 	return token, nil
 }
 
+// Login аутентифицирует пользователя.
+// Возвращает JWT-токен при успехе.
+// Ошибки: ErrInvalidInput, ErrInvalidCredentials.
 func (s *AuthService) Login(ctx context.Context, reqs model.RequestAuth) (string, error) {
 
 	user, err := s.repo.GetUserByLogin(ctx, reqs.Login)
@@ -78,20 +93,4 @@ func (s *AuthService) Login(ctx context.Context, reqs model.RequestAuth) (string
 	}
 
 	return token, nil
-}
-
-func validateAuthRequest(reqs model.RequestAuth) error {
-	if reqs.Login == "" || reqs.Password == "" {
-		return ErrInvalidInput
-	}
-
-	if len(reqs.Login) < 3 || len(reqs.Login) > 50 {
-		return ErrInvalidLogin
-	}
-
-	if len(reqs.Password) < 6 {
-		return ErrInvalidPassword
-	}
-
-	return nil
 }
