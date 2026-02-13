@@ -25,3 +25,7 @@ func (db *Database) GetPool() *pgxpool.Pool {
 func (db *Database) Close() {
 	db.pool.Close()
 }
+
+func (db *Database) Ping(ctx context.Context) error {
+	return db.pool.Ping(ctx)
+}

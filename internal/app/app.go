@@ -78,6 +78,9 @@ func NewApp() (*App, error) {
 	if err != nil {
 		return nil, fmt.Errorf("connect to database: %w", err)
 	}
+	if err := db.Ping(context.Background()); err != nil {
+		return nil, fmt.Errorf("database unreachable: %w", err)
+	}
 
 	clients := &Clients{
 		Accrual: client.NewAccrualClient(cfg.AccrualSystemAddress),
