@@ -69,6 +69,8 @@ func NewApp() (*App, error) {
 
 	cfg := config.ParseFlags()
 
+	fmt.Fprintf(os.Stderr, "DEBUG: DSN from config = %q\n", cfg.DatabaseDSN)
+
 	if err := logger.Initialize(cfg.LogLevel); err != nil {
 		return nil, fmt.Errorf("initialize logger: %w", err)
 	}
