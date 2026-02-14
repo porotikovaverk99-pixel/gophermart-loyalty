@@ -21,7 +21,7 @@ func NewUserRepository(pool *pgxpool.Pool) *UserPostgresRepository {
 	return &UserPostgresRepository{pool: pool}
 }
 
-func (ps *UserPostgresRepository) CreateUser(ctx context.Context, login string, password_hash string) (int64, error) {
+func (ps *UserPostgresRepository) CreateUser(ctx context.Context, login string, passwordHash string) (int64, error) {
 	var id int64
 
 	err := ps.pool.QueryRow(ctx,
@@ -29,7 +29,7 @@ func (ps *UserPostgresRepository) CreateUser(ctx context.Context, login string, 
          VALUES ($1, $2)
          ON CONFLICT (login) DO NOTHING
          RETURNING id`,
-		login, password_hash).Scan(&id)
+		login, passwordHash).Scan(&id)
 
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {

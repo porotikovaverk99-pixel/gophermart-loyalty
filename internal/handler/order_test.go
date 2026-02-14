@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/porotikovaverk99-pixel/gophermart-loyalty/internal/auth"
 	"github.com/porotikovaverk99-pixel/gophermart-loyalty/internal/handler/mock"
 	"github.com/porotikovaverk99-pixel/gophermart-loyalty/internal/model"
 	"github.com/porotikovaverk99-pixel/gophermart-loyalty/internal/service"
@@ -123,7 +124,7 @@ func TestOrderHandler_BaseOrderHandler(t *testing.T) {
 				req = httptest.NewRequest(tt.method, "/api/user/orders", nil)
 			}
 
-			ctx := context.WithValue(req.Context(), "userID", tt.userID)
+			ctx := context.WithValue(req.Context(), auth.UserIDKey, tt.userID)
 			req = req.WithContext(ctx)
 
 			w := httptest.NewRecorder()

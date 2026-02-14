@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/porotikovaverk99-pixel/gophermart-loyalty/internal/auth"
 	"github.com/porotikovaverk99-pixel/gophermart-loyalty/internal/handler/mock"
 	"github.com/porotikovaverk99-pixel/gophermart-loyalty/internal/model"
 	"github.com/porotikovaverk99-pixel/gophermart-loyalty/internal/service"
@@ -96,7 +97,7 @@ func TestBalanceHandler_GetBalanceHandler(t *testing.T) {
 
 			if tt.userID != nil {
 				if uid, ok := tt.userID.(int64); ok {
-					ctx := context.WithValue(req.Context(), "userID", uid)
+					ctx := context.WithValue(req.Context(), auth.UserIDKey, uid)
 					req = req.WithContext(ctx)
 				}
 			}

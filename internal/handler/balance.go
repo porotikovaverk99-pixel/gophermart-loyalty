@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/porotikovaverk99-pixel/gophermart-loyalty/internal/auth"
 	"github.com/porotikovaverk99-pixel/gophermart-loyalty/internal/model"
 	"github.com/porotikovaverk99-pixel/gophermart-loyalty/internal/service"
 )
@@ -42,7 +43,7 @@ func (h *BalanceHandler) GetBalanceHandler() http.Handler {
 			return
 		}
 
-		userID, ok := r.Context().Value("userID").(int64)
+		userID, ok := r.Context().Value(auth.UserIDKey).(int64)
 		if !ok {
 			jsonError(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
 			return
@@ -92,7 +93,7 @@ func (h *BalanceHandler) BalanceWithdrawHandler() http.Handler {
 			return
 		}
 
-		userID, ok := r.Context().Value("userID").(int64)
+		userID, ok := r.Context().Value(auth.UserIDKey).(int64)
 		if !ok {
 			jsonError(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
 			return
@@ -144,7 +145,7 @@ func (h *BalanceHandler) GetWithdrawalsHandler() http.Handler {
 			return
 		}
 
-		userID, ok := r.Context().Value("userID").(int64)
+		userID, ok := r.Context().Value(auth.UserIDKey).(int64)
 		if !ok {
 			jsonError(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
 			return

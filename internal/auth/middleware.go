@@ -20,8 +20,8 @@ func AuthMiddleware(authManager Manager) func(http.Handler) http.Handler {
 				return
 			}
 
-			ctx := context.WithValue(r.Context(), "userID", userInfo.UserID)
-			ctx = context.WithValue(ctx, "userLogin", userInfo.Login)
+			ctx := context.WithValue(r.Context(), UserIDKey, userInfo.UserID)
+			ctx = context.WithValue(ctx, UserLoginKey, userInfo.Login)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}

@@ -142,42 +142,20 @@ func (s *OrderService) startAccrualWorkers() {
 func (s *OrderService) statusWorker(workerID int) {
 
 	defer s.wg.Done()
-
-	for {
-		select {
-
-		case task, ok := <-s.statusQueue:
-			if !ok {
-				return
-			}
-
-			taskCtx, cancel := context.WithTimeout(context.Background(), s.taskTimeout)
-			defer cancel()
-
-			s.processOrder(taskCtx, task)
-
-		}
+	for task := range s.statusQueue {
+		taskCtx, cancel := context.WithTimeout(context.Background(), s.taskTimeout)
+		s.processOrder(taskCtx, task)
+		cancel()
 	}
 }
 
 func (s *OrderService) accrualWorker(workerID int) {
 
 	defer s.wg.Done()
-
-	for {
-		select {
-
-		case task, ok := <-s.accrualQueue:
-			if !ok {
-				return
-			}
-
-			taskCtx, cancel := context.WithTimeout(context.Background(), s.taskTimeout)
-			defer cancel()
-
-			_ = s.balanceService.CreateAccrual(taskCtx, task.UserID, task.OrderNum, task.Amount)
-
-		}
+	for task := range s.accrualQueue {
+		taskCtx, cancel := context.WithTimeout(context.Background(), s.taskTimeout)
+		_ = s.balanceService.CreateAccrual(taskCtx, task.UserID, task.OrderNum, task.Amount)
+		cancel()
 	}
 }
 
