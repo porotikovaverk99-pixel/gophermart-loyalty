@@ -282,7 +282,7 @@ func TestBalanceHandler_BalanceWithdrawHandler(t *testing.T) {
 
 			if tt.userID != nil {
 				if uid, ok := tt.userID.(int64); ok {
-					ctx := context.WithValue(req.Context(), "userID", uid)
+					ctx := context.WithValue(req.Context(), auth.UserIDKey, uid)
 					req = req.WithContext(ctx)
 				}
 			}
@@ -405,7 +405,7 @@ func TestBalanceHandler_GetWithdrawalsHandler(t *testing.T) {
 
 			if tt.userID != nil {
 				if uid, ok := tt.userID.(int64); ok {
-					ctx := context.WithValue(req.Context(), "userID", uid)
+					ctx := context.WithValue(req.Context(), auth.UserIDKey, uid)
 					req = req.WithContext(ctx)
 				}
 			}
